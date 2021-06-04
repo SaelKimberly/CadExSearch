@@ -7,19 +7,20 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="Commons\ReAct.cs" />
-    <Compile Remove="Commons\Recast.cs" />
     <Compile Remove="Commons\Record.cs" />
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="..\.editorconfig" Link=".editorconfig" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="akavache" Version="7.2.1" />
     <PackageReference Include="AngleSharp" Version="0.15.0" />
     <PackageReference Include="DynamicData" Version="7.1.17" />
-    <PackageReference Include="Portable.BouncyCastle" Version="1.8.10" />
     <PackageReference Include="ReactiveUI" Version="13.3.2" />
     <PackageReference Include="ReactiveUI.Fody" Version="13.3.2" />
     <PackageReference Include="RestSharp" Version="106.11.7" />
-    <PackageReference Include="System.Data.SQLite.Core" Version="1.0.114.2" />
   </ItemGroup>
 
 </Project>

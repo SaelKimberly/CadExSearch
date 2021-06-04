@@ -1,13 +1,30 @@
 ﻿using System;
-using System.ComponentModel;
 using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Markup;
 
-namespace CEOCC.Helper.Commons
+namespace CadExSearch.Commons
 {
-    public delegate object ConvertHandler(object value, Type targetType, object parameter, CultureInfo culture, object extraparam = null);
-    
+    public delegate object ConvertHandler(object value, Type targetType, object parameter, CultureInfo culture,
+        object extraparam = null);
+
+    /* USAGE:
+     *
+     * public static class Converters
+     * {
+     *      public static Recast HideIf { get; } = Recast.Of<bool,Visibility>((b) => b ? Visibility.Hidden : Visibility.Visible);
+     *      public static Recast CollapseIf { get; } = Recast.Of<bool,Visibility>((b) => b ? Visibility.Collapsed : Visibility.Visible);
+     *
+     *      public static Recast IsZero { get; } = Recast.Of<long, bool>((i) => i == 0);
+     * }
+     *
+     * In WPF code:
+     * LastMax is Int32 value.
+     * local Namespace was declared as [xmlns:local="clr-namespace:SaelSharp.Helpers"]
+     *
+     * <StackPanel Visibility="{Binding LastMax, Converter={local:Recast {x:Static local:Converters.IsZero}, NextCast={x:Static local:Converters.HideIf}}, Mode=OneWay}">
+     */
+
     public class Recast : MarkupExtension, IValueConverter
     {
         public Recast(Recast ch, object parameter1 = null, object parameter2 = null)
@@ -16,104 +33,115 @@ namespace CEOCC.Helper.Commons
             Parameter1 = parameter1;
             Parameter2 = parameter2;
         }
-        public Recast(Recast ch, object parameter) : this(ch, parameter, null) { }
-        public Recast(Recast ch) : this(ch, null, null) { }
 
-        public ConvertHandler ConvertHandler { get; private set; }
+        public Recast(Recast ch, object parameter) : this(ch, parameter, null)
+        {
+        }
+
+        public Recast(Recast ch) : this(ch, null, null)
+        {
+        }
+
+        protected Recast()
+        {
+        }
+
+        public ConvertHandler ConvertHandler { get; private init; }
         public Recast ConvertBackHandler { internal get; set; }
         internal object Parameter1 { set; private get; }
         internal object Parameter2 { set; private get; }
 
         public Recast NextCast { set; private get; }
-        internal object UpCast(object value, object p1 = null, object p2 = null)
-        {
-            try
-            {
-                if (value == default) return default;
-                return ConvertHandler?.Invoke(value, value.GetType(), Parameter1 ?? p1, default, Parameter2 ?? p2) ?? value;
-            }
-            catch
-            {
-                return value;
-            }
-        }
-        internal object DnCast(object value, object p1 = null, object p2 = null)
-        {
-            try
-            {
-                return ((ConvertHandler)ConvertBackHandler)?.Invoke(value, value.GetType(), Parameter1 ?? p1, default, Parameter2 ?? p2) ?? value;
-            }
-            catch
-            {
-                return value;
-            }
-        }
 
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
-            try
-            {
-                var s1 = UpCast(value, parameter);
-                return NextCast?.UpCast(s1) ?? s1;
-            }
-            catch
-            {
-                return value;
-            }
+            return value
+                .SafeLet(v => UpCast(v, parameter))
+                .SafeLet(v => NextCast.UpCast(v), _ => NextCast is null);
         }
 
-        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => DnCast(value, parameter);
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            return DnCast(value, parameter);
+        }
+
+        internal object UpCast(object value, object p1 = null, object p2 = null)
+        {
+            return value.SafeLet(_ => ConvertHandler?.Invoke(_, _.GetType(),
+                Parameter1 ?? p1,
+                default,
+                Parameter2 ?? p2), v => v == default);
+        }
+
+        internal object DnCast(object value, object p1 = null, object p2 = null)
+        {
+            return value.SafeLet(_ => ((ConvertHandler) ConvertBackHandler)?.Invoke(_, _.GetType(),
+                Parameter1 ?? p1,
+                default,
+                Parameter2 ?? p2));
+        }
 
         public override object ProvideValue(IServiceProvider serviceProvider)
         {
             return this;
         }
 
-        protected Recast() { }
         public static Recast Of(Func<object, object> f)
         {
-            return new() { ConvertHandler = (v, t, p, c, e) => f(v) };
+            return new() {ConvertHandler = (v, t, p, c, e) => f(v)};
         }
+
         public static Recast Of(Func<object, object, object> f)
         {
-            return new() { ConvertHandler = (v, t, p, c, e) => f(v, p) };
+            return new() {ConvertHandler = (v, t, p, c, e) => f(v, p)};
         }
+
         public static Recast Of(Func<object, object, object, object> f)
         {
-            return new() { ConvertHandler = (v, t, p, c, e) => f(v, p, e) };
+            return new() {ConvertHandler = (v, t, p, c, e) => f(v, p, e)};
         }
+
         public static Recast Of<T>(Func<T, object> f)
         {
-            return new() { ConvertHandler = (v, t, p, c, e) => f((T)v) };
-        }
+            return new() {ConvertHandler = (v, t, p, c, e) => f((T) v)};
+        } // ReSharper disable InconsistentNaming
         public static Recast Of<T, R>(Func<T, R> f)
         {
-            return new() { ConvertHandler = (v, t, p, c, e) => f((T)v) };
+            return new() {ConvertHandler = (v, t, p, c, e) => f((T) v)};
         }
+
         public static Recast Of<T, P1, R>(Func<T, P1, R> f)
         {
-            return new() { ConvertHandler = (v, t, p, c, e) => f((T)v, (P1)p) };
+            return new() {ConvertHandler = (v, t, p, c, e) => f((T) v, (P1) p)};
         }
+
         public static Recast Of<T, P1, P2, R>(Func<T, P1, P2, R> f)
         {
-            return new() { ConvertHandler = (v, t, p, c, e) => f((T)v, (P1)p, (P2)e) };
+            return new() {ConvertHandler = (v, t, p, c, e) => f((T) v, (P1) p, (P2) e)};
         }
+
         public static implicit operator Recast(ConvertHandler ch)
         {
-            return new() { ConvertHandler = ch };
+            return new() {ConvertHandler = ch};
         }
+
         public static implicit operator ConvertHandler(Recast ccc)
         {
             return ccc.ConvertHandler;
         }
-        public static implicit operator Predicate<object>(Recast ccc) => o =>
+
+        public static implicit operator Predicate<object>(Recast ccc)
         {
-            return ccc.Convert(o, o.GetType(), null, default) switch
+            return o =>
             {
-                null => false,
-                bool b => b,
-                _ => true
+                var _r = ccc.Convert(o, o.GetType(), null, default);
+                return _r switch
+                {
+                    null => false,
+                    bool b => b,
+                    _ => true
+                };
             };
-        };
+        }
     }
 }

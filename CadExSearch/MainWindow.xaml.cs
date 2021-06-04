@@ -4,37 +4,32 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net;
-using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
 using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
+using Akavache;
+using CadExSearch.Commons;
 using DynamicData.Binding;
 using RestSharp;
-using SaelSharp.Helpers;
 
 namespace CadExSearch
 {
     /// <summary>
-    /// Interaction logic for MainWindow.xaml
+    ///     Interaction logic for MainWindow.xaml
     /// </summary>
     public partial class MainWindow : Window
     {
         public MainWindow()
         {
-            Client = new CEOCC
+            Client = new CadEx
             {
                 EachResultModifier = Updater,
                 SorterExpression = @"(?:\d+:){2}(?<s2>\d+):(?<s1>\d+)",
                 FilterExpression = @"^[^#]+#\s[РУН]"
             };
+
+            Closing += (_, _) => BlobCache.Shutdown().Wait();
 
             InitializeComponent();
         }
@@ -42,7 +37,7 @@ namespace CadExSearch
         public bool IsSearchByAddressEnabled { get; set; } = true;
 
         private CookieContainer Cookie { get; } = new();
-        public CEOCC Client { get; }
+        public CadEx Client { get; }
 
         public static ReAct SelectAll { get; } = ReAct.Do<ListBox>(lb =>
         {
@@ -61,7 +56,7 @@ namespace CadExSearch
         public static ReAct Copy { get; } = ReAct.Do<IList>(list =>
         {
             if (list == default) return;
-            var collected = string.Join("\r\n", list.Cast<CEOCCResult>().Select(r => r.DefaultView));
+            var collected = string.Join("\r\n", list.Cast<CadExResult>().Select(r => r.DefaultView));
             if (!string.IsNullOrWhiteSpace(collected))
                 Clipboard.SetText(collected);
         });
@@ -69,25 +64,25 @@ namespace CadExSearch
         public static ReAct OpenLink { get; } = ReAct.Do<string>(s =>
         {
             if (Uri.TryCreate(s, UriKind.Absolute, out _))
-                Process.Start(new ProcessStartInfo("cmd", $"/c start {s}") { CreateNoWindow = true });
+                Process.Start(new ProcessStartInfo("cmd", $"/c start {s}") {CreateNoWindow = true});
         }, s => Uri.TryCreate(s, UriKind.Absolute, out _));
 
         public bool AppendMode { get; set; } = false;
-        public ObservableCollectionExtended<CEOCCResult> FetchedRecords { get; set; } = new();
+        public ObservableCollectionExtended<CadExResult> FetchedRecords { get; set; } = new();
 
-        public CEOCCResult Updater(CEOCCResult r)
+        public CadExResult Updater(CadExResult r)
         {
             try
             {
                 if (r.PortalAddress == default || Client.UseResultModifyerIfExists == null)
-                    return r with { Status = "Неизвестный" };
+                    return r with {Status = "Неизвестный"};
                 var mode = Client.UseResultModifyerIfExists == true;
                 var subClient =
                     new RestClient(mode ? "http://rosreestr.gov.ru/api/online/" : "https://rosreestr.gov.ru/wps/")
                     {
                         Timeout = -1,
-                        CookieContainer = mode ? Cookie : Client.Cookie,
-                        UserAgent = CEOCC.UserAgent
+                        CookieContainer = mode ? Cookie : CadEx.Cookie,
+                        UserAgent = CadEx.UserAgent
                     };
 
 
@@ -107,7 +102,7 @@ namespace CadExSearch
                         break;
                 }
 
-                if (res is not { StatusCode: HttpStatusCode.OK }) return r with { Status = "Неизвестный" };
+                if (res is not {StatusCode: HttpStatusCode.OK}) return r with {Status = "Неизвестный"};
                 if (!mode)
                 {
                     var extended = new Dictionary<string, string>(
@@ -146,7 +141,7 @@ namespace CadExSearch
                         // ignored
                     }
 
-                    return r with { Status = status, Extended = extended, PKK5Address = pkk5 };
+                    return r with {Status = status, Extended = extended, PKK5Address = pkk5};
                 }
 
                 var st = Regex.Match(res.Content, @"tusStr"":""(?<state>[^""]+)")?.Groups["state"]?.Value; // Status
@@ -155,12 +150,12 @@ namespace CadExSearch
                 return r with
                 {
                     Status = string.IsNullOrWhiteSpace(st) ? "Неизвестен" : st,
-                    Extended = new Dictionary<string, string> { { "Актуально (ФИР):", ad } }
+                    Extended = new Dictionary<string, string> {{"Актуально (ФИР):", ad}}
                 };
             }
             catch
             {
-                return r with { Status = "Неизвестный" };
+                return r with {Status = "Неизвестный"};
             }
         }
 
@@ -177,7 +172,7 @@ namespace CadExSearch
             state_pb.Value = state_pb.Maximum;
         }
 
-        private IEnumerable<string> ParseCadasters(string cads)
+        private static IEnumerable<string> ParseCadasters(string cads)
         {
             var cad = cads.Split(';', StringSplitOptions.RemoveEmptyEntries)
                 .Select(s => Regex.Replace(s.Trim(), @"\s+", ""));
@@ -212,6 +207,11 @@ namespace CadExSearch
                 yield return string.Join(';', ret);
         }
 
+        private void ButtonBase_OnClick(object sender, RoutedEventArgs e)
+        {
+            Client.NewSession(true);
+        }
+
 
 #pragma warning disable IDE1006 // Стили именования
         private void subject_id_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -244,19 +244,14 @@ namespace CadExSearch
         {
             Client.SelectedSettlement = e.AddedItems?.OfType<(string, string)>().FirstOrDefault() ?? default;
         }
-        
+
 
         private void house_KeyUp(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter)
                 Button_Click(this, default);
         }
-        
+
 #pragma warning restore IDE1006 // Стили именования
-        private void ButtonBase_OnClick(object sender, RoutedEventArgs e)
-        {
-            Client.NewSession(true);
-        }
     }
 }
-

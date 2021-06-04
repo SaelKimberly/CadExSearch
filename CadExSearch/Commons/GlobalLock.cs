@@ -14,7 +14,7 @@ namespace CadExSearch.Commons
 
         public ValueTask DisposeAsync()
         {
-            return new(Task.Run(Unlock));
+            return new(Task.Run(() => { Unlock(); }));
         }
 
         public void Dispose()
@@ -55,7 +55,7 @@ namespace CadExSearch.Commons
                 while (true)
                     try
                     {
-                        stream = File.OpenWrite(".\\CEOCC.Cache.lock");
+                        stream = File.OpenWrite(".\\CadEx.Cache.lock");
                         break;
                     }
                     catch
