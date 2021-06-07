@@ -1,6 +1,4 @@
-﻿using Akavache;
-using Akavache.Sqlite3;
-using AngleSharp.Html.Dom;
+﻿using AngleSharp.Html.Dom;
 using AngleSharp.Html.Parser;
 using CadExSearch.Commons;
 using DynamicData;
@@ -53,6 +51,17 @@ namespace CadExSearch
     // ReSharper disable IdentifierTypo
     public class CadEx : ReactiveObject
     {
+        static CadEx()
+        {
+            using var context = new CacheContext();
+            using (GlobalLock.LockSync())
+            {
+                if (!context.Database.EnsureCreated() || context.Records.Any()) return;
+                context.Records.Add(new Record { Id = "subject", BaseId = "subject", Content = "root_record" });
+                context.SaveChanges();
+            }
+        }
+
         private object itemsLock;
         private bool isFullyInitialized = false;
         public CadEx()
@@ -279,7 +288,7 @@ namespace CadExSearch
                 {
                     strs = (from s in doc.QuerySelectorAll("select[name=street_type] > option").Skip(1)
                         select (s.GetAttribute("value"), s.InnerHtml)).ToArray();
-                    
+                    await AddFork("subject", "STR");
                     CacheSetValues("STR", strs);
                 }
                 if (subs_no) lock (itemsLock) Subjects.AddRange(subs);
@@ -309,6 +318,7 @@ namespace CadExSearch
                 regs = response.Content.TryMatches(@"(?<code>\d+);(?<name>.+)",
                     m => (m.Groups["code"].Value, m.Groups["name"].Value)).ToArray();
 
+                await AddFork("subject", $"SUB:{id}");
                 CacheSetValues($"SUB:{id}", regs);
             }
 
@@ -347,7 +357,7 @@ namespace CadExSearch
 
                 setm = response.Content.TryMatches(@"(?<code>\d+);(?<name>.+)",
                     m => (m.Groups["code"].Value, m.Groups["name"].Value)).ToArray();
-
+                await AddFork("subject", $"REG:S:{id}");
                 CacheSetValues($"REG:S:{id}", setm);
             }
 
@@ -372,6 +382,7 @@ namespace CadExSearch
                 sett = response.Content.TryMatches(@"(?<code>\d+);(?<name>.+)",
                     m => (m.Groups["code"].Value, m.Groups["name"].Value)).ToArray();
 
+                await AddFork("subject", $"REG:T:{id}");
                 CacheSetValues($"REG:T:{id}", sett);
             }
 
@@ -409,6 +420,7 @@ namespace CadExSearch
                 set = response.Content.TryMatches(@"(?<code>\d+);(?<name>.+)",
                     m => (m.Groups["code"].Value, m.Groups["name"].Value)).ToArray();
 
+                await AddFork("subject", $"REG:{SelectedRegion}:S:{id}");
                 CacheSetValues($"REG:{SelectedRegion}:S:{id}", Settlement);
             }
 
@@ -651,12 +663,12 @@ namespace CadExSearch
 
                 var r3 = r2 is null ? Array.Empty<CadExResult>() : ParsePage(r2).Select(r => erm(r)).ToArray();
 
-                foreach (var r in r3)
+                r3.AsParallel().ForAll(r =>
                 {
                     lock (itemsLock)
                         RawFetchedResults.Add(new[] {r});
-                }
-
+                });
+                
                 //lock (itemsLock)
                 //    r3.ToObservable().ObserveOn(RxApp.TaskpoolScheduler)
                 //        .Subscribe(RawFetchedResults.Add);
@@ -705,39 +717,83 @@ namespace CadExSearch
 
         public static SHA512 SHA { get; } = SHA512.Create();
 
-        public static string GetId(string data)
+        public static string GetId((string,string) record)
         {
-            var ms = new MemoryStream(Encoding.UTF8.GetBytes(data));
+            var ms = new MemoryStream(Encoding.UTF8.GetBytes($"{record.Item1}:{record.Item2}"));
             var hash = Convert.ToBase64String(SHA.ComputeHash(ms));
             return Regex.Replace(hash, @"(\W|\d)", "").ToUpper(CultureInfo.InvariantCulture)[..20];
         }
 
         private static (string, string)[] CacheGetValues(string root)
         {
+            using (var cache = new CacheContext())
             using (GlobalLock.LockSync())
             {
-                using var cache = new SqlRawPersistentBlobCache(".\\CadEx.Cache.db3", RxApp.TaskpoolScheduler);
-                var recs = cache.GetAllObjects<CacheRecord>().Wait();
-                return
-                    (from r in recs
-                    where r.BaseId == root && r.Type == "value"
-                    orderby r.Value.Item2
-                    select r.Value).ToArray();
+                var ret = new List<(string, string)>();
+                foreach (var rr in from r in cache.Records
+                    where r.BaseId == root && r.Content != "root_record" && r.Content != "fork_record"
+                    select r.Content.Split(':', StringSplitOptions.RemoveEmptyEntries))
+                    ret.Add((rr[0], rr[1]));
+                return ret.OrderBy(v => v.Item2).ToArray();
             }
+            // Akavache variance:
+            //using (GlobalLock.LockSync())
+            //{
+            //    using var cache = new SqlRawPersistentBlobCache(".\\CadEx.Cache.db3", RxApp.TaskpoolScheduler);
+            //    var recs = cache.GetAllObjects<CacheRecord>().Wait();
+            //    return
+            //        (from r in recs
+            //        where r.BaseId == root && r.Type == "value"
+            //        orderby r.Value.Item2
+            //        select r.Value).ToArray();
+            //}
         }
 
-        private static void CacheSetValues(string root, IEnumerable<(string, string)> values)
+        private static async void CacheSetValues(string root, IEnumerable<(string, string)> values)
         {
-            var val = values as (string, string)[] ?? values.ToArray();
-            if (!val.Any()) return;
-            var recs = val.ToDictionary(s => GetId($"{s.Item1}:{s.Item2}"),
-                s => new CacheRecord(GetId($"{s.Item1}:{s.Item2}"), s, "value", root));
-            using (GlobalLock.LockSync())
+            var vals = values as (string, string)[] ?? values.ToArray();
+            if (!vals.Any()) return;
+            await using (await GlobalLock.LockAsync())
+            await using (var cache = new CacheContext())
             {
-                using var cache = new SqlRawPersistentBlobCache(".\\CadEx.Cache.db3", RxApp.TaskpoolScheduler);
-                using (cache.InsertAllObjects(recs).Subscribe()) { }
-                using (cache.Flush().Subscribe()) { }
+                foreach (var p in vals)
+                {
+                    var id = GetId(p);
+                    if (cache.Records.Any(r => r.Id == id)) continue;
+                    await cache.AddAsync(new Record {BaseId = root, Id = id, Content = $"{p.Item1}:{p.Item2}"});
+                }
+                await cache.SaveChangesAsync();
             }
+
+            // Akavache variance
+            //var val = values as (string, string)[] ?? values.ToArray();
+            //if (!val.Any()) return;
+            //var recs = val.ToDictionary(s => GetId($"{s.Item1}:{s.Item2}"),
+            //    s => new CacheRecord(GetId($"{s.Item1}:{s.Item2}"), s, "value", root));
+            //using (GlobalLock.LockSync())
+            //{
+            //    using var cache = new SqlRawPersistentBlobCache(".\\CadEx.Cache.db3", RxApp.TaskpoolScheduler);
+            //    using (cache.InsertAllObjects(recs).Subscribe()) { }
+            //    using (cache.Flush().Subscribe()) { }
+            //}
+        }
+
+        private static async Task<bool> AddFork(string root, string fork)
+        {
+            try
+            {
+                await using (await GlobalLock.LockAsync())
+                await using (var cache = new CacheContext())
+                {
+                    await cache.AddAsync(new Record { BaseId = root, Id = fork, Content = "fork_record" });
+                    await cache.SaveChangesAsync();
+                }
+            }
+            catch
+            {
+                return false;
+            }
+            return true;
         }
 
         #endregion

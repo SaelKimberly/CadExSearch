@@ -1,5 +1,5 @@
 ﻿using System.Windows;
-using Akavache;
+//using Akavache;
 
 namespace CadExSearch
 {
@@ -10,7 +10,7 @@ namespace CadExSearch
     {
         public App()
         {
-            Registrations.Start("CadExSearch");
+            // Registrations.Start("CadExSearch");
         }
     }
 }

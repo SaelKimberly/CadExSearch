@@ -8,7 +8,6 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using Akavache;
 using CadExSearch.Commons;
 using DynamicData.Binding;
 using RestSharp;
@@ -29,7 +28,7 @@ namespace CadExSearch
                 FilterExpression = @"^[^#]+#\s[РУН]"
             };
 
-            Closing += (_, _) => BlobCache.Shutdown().Wait();
+            //Closing += (_, _) => BlobCache.Shutdown().Wait();
 
             InitializeComponent();
         }
