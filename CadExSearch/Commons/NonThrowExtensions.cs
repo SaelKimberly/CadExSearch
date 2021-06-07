@@ -17,7 +17,7 @@ namespace CadExSearch.Commons
         /// <param name="val"></param>
         /// <returns></returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool SafeLet<T>(this T input, Func<T, T> f, [MaybeNullWhen(false)] out T val)
+        public static bool SafeLet<T>(this T input, in Func<T, T> f, [MaybeNullWhen(false)] out T val)
         {
             val = default;
             if (f == default) return false;
@@ -44,7 +44,7 @@ namespace CadExSearch.Commons
         /// <param name="val"></param>
         /// <returns></returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool SafeLet<T>(this T input, Func<T, T> f, Predicate<T> whenThrow,
+        public static bool SafeLet<T>(this T input, in Func<T, T> f, in Predicate<T> whenThrow,
             [MaybeNullWhen(false)] out T val)
         {
             val = default;
@@ -73,7 +73,7 @@ namespace CadExSearch.Commons
         /// <param name="val"></param>
         /// <returns></returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool SafeLet<T1, T2>(this T1 input, Func<T1, T2> f, [MaybeNullWhen(false)] out T2 val)
+        public static bool SafeLet<T1, T2>(this T1 input, in Func<T1, T2> f, [MaybeNullWhen(false)] out T2 val)
         {
             val = default;
             if (f == default) return false;
@@ -101,7 +101,7 @@ namespace CadExSearch.Commons
         /// <param name="val"></param>
         /// <returns></returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool SafeLet<T1, T2>(this T1 input, Func<T1, T2> f, Predicate<T1> whenThrow,
+        public static bool SafeLet<T1, T2>(this T1 input, in Func<T1, T2> f, in Predicate<T1> whenThrow,
             [MaybeNullWhen(false)] out T2 val)
         {
             val = default;
@@ -128,7 +128,7 @@ namespace CadExSearch.Commons
         /// <param name="defval"></param>
         /// <returns></returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static T SafeLet<T>(this T input, Func<T, T> f, T defval)
+        public static T SafeLet<T>(this T input, in Func<T, T> f, T defval)
         {
             return input.SafeLet<T>(f, out var v) ? v : defval;
         }
@@ -142,7 +142,7 @@ namespace CadExSearch.Commons
         /// <param name="f"></param>
         /// <returns></returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static T SafeLet<T>(this T input, Func<T, T> f)
+        public static T SafeLet<T>(this T input, in Func<T, T> f)
         {
             return input.SafeLet<T>(f, out var v) ? v : input;
         }
@@ -159,7 +159,7 @@ namespace CadExSearch.Commons
         /// <param name="defval"></param>
         /// <returns></returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static T SafeLet<T>(this T input, Func<T, T> f, Predicate<T> whenThrow, T defval)
+        public static T SafeLet<T>(this T input, in Func<T, T> f, in Predicate<T> whenThrow, T defval)
         {
             return input.SafeLet<T>(f, whenThrow, out var v) ? v : defval;
         }
@@ -175,7 +175,7 @@ namespace CadExSearch.Commons
         /// <param name="whenThrow"></param>
         /// <returns></returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static T SafeLet<T>(this T input, Func<T, T> f, Predicate<T> whenThrow)
+        public static T SafeLet<T>(this T input, in Func<T, T> f, in Predicate<T> whenThrow)
         {
             return input.SafeLet<T>(f, whenThrow, out var v) ? v : input;
         }
@@ -191,7 +191,7 @@ namespace CadExSearch.Commons
         /// <param name="defval"></param>
         /// <returns></returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static T2 SafeLet<T1, T2>(this T1 input, Func<T1, T2> f, T2 defval = default)
+        public static T2 SafeLet<T1, T2>(this T1 input, in Func<T1, T2> f, T2 defval = default)
         {
             return input.SafeLet(f, out var v) ? v : defval;
         }
@@ -209,7 +209,7 @@ namespace CadExSearch.Commons
         /// <param name="defval"></param>
         /// <returns></returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static T2 SafeLet<T1, T2>(this T1 input, Func<T1, T2> f, Predicate<T1> whenThrow, T2 defval = default)
+        public static T2 SafeLet<T1, T2>(this T1 input, in Func<T1, T2> f, in Predicate<T1> whenThrow, T2 defval = default)
         {
             return input.SafeLet(f, whenThrow, out var v) ? v : defval;
         }

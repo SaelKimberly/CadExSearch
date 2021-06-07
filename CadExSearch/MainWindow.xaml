@@ -260,7 +260,7 @@
                 </TextBlock>
                 <TextBlock Foreground="Black">
                     <Run Text=" [за " />
-                    <Run Text="{Binding LastTime.Seconds, Mode=OneWay}" />
+                    <Run Text="{Binding Client.TotalTime, Mode=OneWay}" />
                     <Run Text=" сек]" />
                 </TextBlock>
             </StackPanel>

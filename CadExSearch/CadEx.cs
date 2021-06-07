@@ -1,4 +1,14 @@
-﻿using System;
+﻿using Akavache;
+using Akavache.Sqlite3;
+using AngleSharp.Html.Dom;
+using AngleSharp.Html.Parser;
+using CadExSearch.Commons;
+using DynamicData;
+using DynamicData.Binding;
+using ReactiveUI;
+using ReactiveUI.Fody.Helpers;
+using RestSharp;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -11,20 +21,14 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using System.Threading.Tasks.Dataflow;
 using System.Windows.Data;
-using Akavache;
-using Akavache.Sqlite3;
-using AngleSharp.Html.Dom;
-using AngleSharp.Html.Parser;
-using CadExSearch.Commons;
-using DynamicData.Binding;
-using ReactiveUI;
-using ReactiveUI.Fody.Helpers;
-using RestSharp;
-using TS.Utils.Pools;
 
 #pragma warning disable IDE0011
+#pragma warning disable IDE0055
+#pragma warning disable CA1805
+#pragma warning disable CA2201
+
+// ReSharper disable StringLiteralTypo
 
 namespace CadExSearch
 {
@@ -32,8 +36,6 @@ namespace CadExSearch
 
     public record CadExResult
     {
-        public string Message { get; set; }
-
         public string CadNumber { get; set; }
         public string Address { get; set; }
 
@@ -44,8 +46,6 @@ namespace CadExSearch
         public string Status { get; set; } = default;
 
         public string DefaultView => $"{CadNumber}\t# {Status ?? "Неизвестный"}\t# {Address}";
-
-        public TimeSpan Time { get; set; }
     }
 
 
@@ -53,6 +53,8 @@ namespace CadExSearch
     // ReSharper disable IdentifierTypo
     public class CadEx : ReactiveObject
     {
+        private object itemsLock;
+        private bool isFullyInitialized = false;
         public CadEx()
         {
             Client = new RestClient("https://rosreestr.gov.ru/wps/")
@@ -67,15 +69,7 @@ namespace CadExSearch
                 {"Accept-Language", "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3"},
                 {"Connection", "keep-alive"}
             });
-
-            FetchedResults = (ListCollectionView) CollectionViewSource.GetDefaultView(RawFetchedResults);
-            FetchedResults.Filter = s =>
-            {
-                var r = s as CadExResult;
-                if (string.IsNullOrWhiteSpace(FilterExpression) || FilterDirection == null) return true;
-                return FilterDirection.SafeLet(_ => _ == Regex.IsMatch(r.DefaultView, FilterExpression));
-            };
-
+            
             this.WhenAnyValue(_ => _.Message)
                 .Where(_ => _ != "")
                 .Delay(TimeSpan.FromSeconds(5))
@@ -83,7 +77,50 @@ namespace CadExSearch
 
             this.WhenAnyValue(_ => _.InitialPage)
                 .Subscribe(async _ =>
-                    await PreloadCommonAssets());
+                {
+                    if (isFullyInitialized) goto jpl; 
+
+                    RawFetchedResults = new ObservableCollectionExtended<CadExResult>();
+
+                    Subjects = new ObservableCollectionExtended<(string, string)>();
+                    Regions = new ObservableCollectionExtended<(string, string)>();
+                    Settlement = new ObservableCollectionExtended<(string, string)>();
+                    SettlementTypes = new ObservableCollectionExtended<(string, string)>();
+                    StreetTypes = new ObservableCollectionExtended<(string, string)>();
+
+                    itemsLock = new object();
+                    
+                    BindingOperations.EnableCollectionSynchronization(RawFetchedResults, itemsLock);
+
+                    BindingOperations.EnableCollectionSynchronization(Subjects, itemsLock);
+                    BindingOperations.EnableCollectionSynchronization(Regions, itemsLock);
+                    BindingOperations.EnableCollectionSynchronization(Settlement, itemsLock);
+                    BindingOperations.EnableCollectionSynchronization(SettlementTypes, itemsLock);
+                    BindingOperations.EnableCollectionSynchronization(StreetTypes, itemsLock);
+
+                    FetchedResults = (ListCollectionView)CollectionViewSource.GetDefaultView(RawFetchedResults);
+                    
+
+                    BindingOperations.EnableCollectionSynchronization(FetchedResults, itemsLock);
+
+                    FetchedResults.Filter = s =>
+                    {
+                        var r = s as CadExResult;
+                        if (string.IsNullOrWhiteSpace(FilterExpression) || FilterDirection == null) return true;
+                        return FilterDirection.SafeLet(_ => _ == Regex.IsMatch(r.DefaultView, FilterExpression));
+                    };
+
+                    
+
+                    RawFetchedResults.CollectionChanged += (s, e) =>
+                    {
+                        TotalFetch = RawFetchedResults.Count;
+                        TotalShown = FetchedResults.Count;
+                    }; 
+                    jpl:
+                    isFullyInitialized = true;
+                    await PreloadCommonAssets();
+                });
 
             this.WhenAnyValue(_ => _.SelectedSubject)
                 .Subscribe(async s =>
@@ -92,6 +129,8 @@ namespace CadExSearch
                     RegionAvailable = s != default;
                 });
 
+            
+            
             this.WhenAnyValue(_ => _.SelectedRegion)
                 .Subscribe(async s =>
                 {
@@ -117,13 +156,8 @@ namespace CadExSearch
                     FetchedResults.Refresh();
                 });
 
-            RawFetchedResults.CollectionChanged += (s, e) =>
-            {
-                TotalFetch = RawFetchedResults.Count;
-                TotalShown = FetchedResults.Count;
-            };
-
             this.WhenAnyValue(_ => _.FilterExpression, _ => _.FilterDirection)
+                .ObserveOnDispatcher()
                 .Subscribe(_ => FetchedResults.Refresh());
 
             InitialConnect();
@@ -142,14 +176,14 @@ namespace CadExSearch
         [Reactive] public bool IsConnected { get; private set; }
         [Reactive] public string Message { get; private set; } = "";
 
-        public ObservableCollectionExtended<(string, string)> Subjects { get; } = new();
-        public ObservableCollectionExtended<(string, string)> Regions { get; } = new();
-        public ObservableCollectionExtended<(string, string)> SettlementTypes { get; } = new();
-        public ObservableCollectionExtended<(string, string)> Settlement { get; } = new();
-        public ObservableCollectionExtended<(string, string)> StreetTypes { get; } = new();
+        public ObservableCollectionExtended<(string, string)> Subjects { get; private set; }
+        public ObservableCollectionExtended<(string, string)> Regions { get; private set; }
+        public ObservableCollectionExtended<(string, string)> SettlementTypes { get; private set; }
+        public ObservableCollectionExtended<(string, string)> Settlement { get; private set; }
+        public ObservableCollectionExtended<(string, string)> StreetTypes { get; private set; }
 
-        public ObservableCollectionExtended<CadExResult> RawFetchedResults { get; } = new();
-        public ListCollectionView FetchedResults { get; }
+        public ObservableCollectionExtended<CadExResult> RawFetchedResults { get; private set; }
+        public ListCollectionView FetchedResults { get; private set; }
 
         [Reactive] public string FilterExpression { get; set; }
         [Reactive] public bool? FilterDirection { get; set; }
@@ -160,6 +194,7 @@ namespace CadExSearch
         [Reactive] public int TotalFound { get; private set; }
         [Reactive] public int TotalFetch { get; private set; }
         [Reactive] public int TotalShown { get; private set; }
+        [Reactive] public int TotalTime { get; private set; }
 
         [Reactive] public bool IsBusy { get; private set; }
         [Reactive] public bool? UseResultModifyerIfExists { get; set; } = true;
@@ -206,37 +241,49 @@ namespace CadExSearch
         private async Task PreloadCommonAssets()
         {
             IsBusy = true;
-            if (!Subjects.Any() || !StreetTypes.Any())
+            bool subs_no;
+            bool strs_no;
+            if (itemsLock is null)
+            {
+                IsBusy = false;
+                return;
+            }
+            lock (itemsLock)
+                if (Subjects is null || StreetTypes is null || InitialPage is null)
+                {
+                    IsBusy = false;
+                    return;
+                }
+
+            lock (itemsLock)
+            {
+                subs_no = !Subjects.Any();
+                strs_no = !StreetTypes.Any();
+            }
+
+            if (subs_no || strs_no)
             {
                 var subs = CacheGetValues("subject");
                 var strs = CacheGetValues("STR");
-
-                if (!string.IsNullOrEmpty(InitialPage) && !(subs?.Any() ?? strs?.Any() ?? false))
+                
+                using var doc = await Parser.ParseDocumentAsync(InitialPage);
+                if (!(subs?.Any() ?? false) && subs_no)
                 {
-                    using var doc = await Parser.ParseDocumentAsync(InitialPage);
-                    if (!(subs?.Any() ?? false) && !Subjects.Any())
-                    {
-                        subs = (from s in doc.QuerySelectorAll("select#oSubjectId > option").Skip(1)
-                            select (s.GetAttribute("value"), s.InnerHtml)).ToArray();
-                        CacheSetValues("subject", subs);
-                    }
-
-                    if (!(strs?.Any() ?? false) && !StreetTypes.Any())
-                    {
-                        strs = (from s in doc.QuerySelectorAll("select[name=street_type] > option").Skip(1)
-                            select (s.GetAttribute("value"), s.InnerHtml)).ToArray();
-                        StreetTypes.AddRange(strs);
-                        CacheSetValues("STR", strs);
-                    }
+                    subs = (from s in doc.QuerySelectorAll("select#oSubjectId > option").Skip(1)
+                        select (s.GetAttribute("value"), s.InnerHtml)).ToArray();
+                    
+                    CacheSetValues("subject", subs);
                 }
-                else
+
+                if (!(strs?.Any() ?? false) && !strs_no)
                 {
-                    if (!Subjects.Any())
-                        Subjects.AddRange(subs ?? Array.Empty<(string, string)>());
-
-                    if (!StreetTypes.Any())
-                        StreetTypes.AddRange(strs ?? Array.Empty<(string, string)>());
+                    strs = (from s in doc.QuerySelectorAll("select[name=street_type] > option").Skip(1)
+                        select (s.GetAttribute("value"), s.InnerHtml)).ToArray();
+                    
+                    CacheSetValues("STR", strs);
                 }
+                if (subs_no) lock (itemsLock) Subjects.AddRange(subs);
+                if (strs_no) lock (itemsLock) StreetTypes.AddRange(strs ?? Array.Empty<(string, string)>());
             }
 
             IsBusy = false;
@@ -265,13 +312,12 @@ namespace CadExSearch
                 CacheSetValues($"SUB:{id}", regs);
             }
 
-            await ReactiveCommand.Create(() =>
-                {
-                    Regions.Clear();
-                    Regions.AddRange(regs);
-                }, null, RxApp.MainThreadScheduler)
-                .Execute();
-
+            lock (itemsLock)
+            {
+                Regions.Clear();
+                Regions.AddRange(regs);
+            }
+            
             lbl:
             SelectedRegion = default;
             SelectedSettlement = default;
@@ -305,12 +351,11 @@ namespace CadExSearch
                 CacheSetValues($"REG:S:{id}", setm);
             }
 
-            await ReactiveCommand.Create(() =>
-                {
-                    Settlement.Clear();
-                    Settlement.AddRange(setm);
-                }, null, RxApp.MainThreadScheduler)
-                .Execute();
+            lock (itemsLock)
+            {
+                Settlement.Clear();
+                Settlement.AddRange(setm);
+            }
 
             if (sett == null || !sett.Any())
             {
@@ -330,11 +375,11 @@ namespace CadExSearch
                 CacheSetValues($"REG:T:{id}", sett);
             }
 
-            await ReactiveCommand.Create(() =>
+            lock (itemsLock)
             {
                 SettlementTypes.Clear();
                 SettlementTypes.AddRange(sett);
-            }, null, RxApp.MainThreadScheduler).Execute();
+            }
 
             lbl:
             SelectedSettlement = default;
@@ -367,12 +412,11 @@ namespace CadExSearch
                 CacheSetValues($"REG:{SelectedRegion}:S:{id}", Settlement);
             }
 
-            await ReactiveCommand.Create(() =>
-                {
-                    Settlement.Clear();
-                    Settlement.AddRange(set);
-                }, null, RxApp.MainThreadScheduler)
-                .Execute();
+            lock (itemsLock)
+            {
+                Settlement.Clear();
+                Settlement.AddRange(set);
+            }
 
             lbl:
             SelectedSettlement = default;
@@ -449,7 +493,7 @@ namespace CadExSearch
             #endregion
         }
 
-        private IEnumerable<CadExResult> ParsePage(IHtmlDocument page, Func<TimeSpan> timeFunc)
+        private IEnumerable<CadExResult> ParsePage(IHtmlDocument page)
         {
             var erm = UseResultModifyerIfExists != null ? EachResultModifier ?? (s => s) : s => s;
 
@@ -469,10 +513,7 @@ namespace CadExSearch
                         CadNumber = Regex.Replace(cadn, @"(^\s*)|(\s*$)", ""),
                         Address = Regex.Replace(desc, @"(^\s*)|(\s*$)", ""),
                         PortalAddress = addr
-                    }) with
-                    {
-                        Time = timeFunc?.Invoke() ?? default
-                    };
+                    });
         }
 
         private IRestRequest AddHeaders(IRestRequest request, string street, string house = "", string building = "",
@@ -554,10 +595,7 @@ namespace CadExSearch
             var sw = new Stopwatch();
             sw.Start();
 
-            TimeSpan GetCurTime()
-            {
-                return sw.Elapsed;
-            }
+            int GetCurTime() => (int)sw.Elapsed.TotalSeconds;
 
             var response = await Client.ExecuteAsync(initialRequest);
             if (response.StatusCode != HttpStatusCode.OK)
@@ -571,20 +609,21 @@ namespace CadExSearch
 
             var erm = UseResultModifyerIfExists != null ? EachResultModifier ?? (s => s) : s => s;
 
-            var cmd = ReactiveCommand.Create<IEnumerable<CadExResult>>(r =>
-            {
-                RawFetchedResults.Clear();
-                RawFetchedResults.AddRange(r);
-            }, null, RxApp.MainThreadScheduler);
-
             #endregion
 
             #region Current Page Parsing - LINQ Mode
 
-            ParsePage(page, GetCurTime)
+            ParsePage(page)
                 .Select(r => erm(r))
-                .ToObservable()//.ObserveOn(RxApp.MainThreadScheduler)
-                .Subscribe(r => cmd.Execute(new[] {r}).Wait());
+                .ToObservable()
+                .Subscribe(r =>
+                {
+                    lock (itemsLock)
+                    {
+                        RawFetchedResults.Add(r);
+                        TotalTime = GetCurTime();
+                    }
+                });
 
             #endregion
 
@@ -592,41 +631,40 @@ namespace CadExSearch
 
             var portlet_id = page.QuerySelector(".asa\\.portlet\\.id").InnerHtml;
 
-            var t1 = new TransformBlock<int, IRestResponse>(async i =>
-                    await new RestClient("https://rosreestr.gov.ru/wps")
-                        .ExecuteAsync(
-                            new RestRequest($"{URIs["form-addr"]}?online_request_search_page={i + 2}#{portlet_id}")
-                                .AddHeader("Referer", Referer).AddHeader("Upgrade-Insecure-Requests", "1")),
-                new ExecutionDataflowBlockOptions
-                {
-                    MaxDegreeOfParallelism = 8
-                });
+            await Parallel.ForEachAsync(Enumerable
+                .Range(0, TotalFound / 20 + (TotalFound % 20 > 0 ? 1 : 0) - 1), async (i, _) =>
+            {
+                IRestResponse r1 = null;
 
-            var t2 = new TransformBlock<IRestResponse, CadExResult[]>(async rr =>
-            {
-                var ret = rr is {StatusCode: HttpStatusCode.OK} ? await Parser.ParseDocumentAsync(rr.Content) : null;
-                return ret is null
-                    ? Array.Empty<CadExResult>()
-                    : ParsePage(ret, GetCurTime).Select(r => erm(r) with {Time = GetCurTime()}).ToArray();
-            }, new ExecutionDataflowBlockOptions
-            {
-                MaxDegreeOfParallelism = 8
+                for (var j = 0; j < 5 && r1 is not {StatusCode: HttpStatusCode.OK}; j++)
+                    r1 = await new RestClient("https://rosreestr.gov.ru/wps") {CookieContainer = Cookie}
+                        .ExecuteAsync(new RestRequest(
+                                $"{URIs["form-addr"]}?online_request_search_page={i + 2}#{portlet_id}")
+                            .AddHeader("Referer", Referer).AddHeader("Upgrade-Insecure-Requests", "1"), _);
+
+                TotalTime = GetCurTime();
+
+                var r2 = r1 is {StatusCode: HttpStatusCode.OK} ? await Parser.ParseDocumentAsync(r1.Content, _) : null;
+                if (r2 is null) Message = $"Не удалось получить страницу {i}";
+
+                TotalTime = GetCurTime();
+
+                var r3 = r2 is null ? Array.Empty<CadExResult>() : ParsePage(r2).Select(r => erm(r)).ToArray();
+
+                foreach (var r in r3)
+                {
+                    lock (itemsLock)
+                        RawFetchedResults.Add(new[] {r});
+                }
+
+                //lock (itemsLock)
+                //    r3.ToObservable().ObserveOn(RxApp.TaskpoolScheduler)
+                //        .Subscribe(RawFetchedResults.Add);
+
+                TotalTime = GetCurTime();
             });
-
-            
-            t2.AsObservable().ObserveOn(RxApp.MainThreadScheduler)
-                .Subscribe(r => ReactiveCommand.Create(() =>
-                {
-                    RawFetchedResults.Clear();
-                    RawFetchedResults.AddRange(r);
-                }).Execute().Wait());
-
-            t1.LinkTo(t2);
-            
-            for (var i = 0; i < TotalFound / 20 + (TotalFound % 20 > 0 ? 1 : 0) - 1; i++) t1.Post(i);
-            t1.Complete();
-
-            //a1.Completion.Wait();
+    
+            sw.Stop();
             return true;
         }
 
@@ -680,7 +718,11 @@ namespace CadExSearch
             {
                 using var cache = new SqlRawPersistentBlobCache(".\\CadEx.Cache.db3", RxApp.TaskpoolScheduler);
                 var recs = cache.GetAllObjects<CacheRecord>().Wait();
-                return recs.Where(c => c.BaseId == root && c.Type == "value").Select(v => v.Value).ToArray();
+                return
+                    (from r in recs
+                    where r.BaseId == root && r.Type == "value"
+                    orderby r.Value.Item2
+                    select r.Value).ToArray();
             }
         }
 
@@ -693,13 +735,8 @@ namespace CadExSearch
             using (GlobalLock.LockSync())
             {
                 using var cache = new SqlRawPersistentBlobCache(".\\CadEx.Cache.db3", RxApp.TaskpoolScheduler);
-                using (cache.InsertAllObjects(recs).Subscribe())
-                {
-                }
-
-                using (cache.Flush().Subscribe())
-                {
-                }
+                using (cache.InsertAllObjects(recs).Subscribe()) { }
+                using (cache.Flush().Subscribe()) { }
             }
         }
 

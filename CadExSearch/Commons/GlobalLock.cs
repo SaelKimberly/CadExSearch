@@ -14,12 +14,13 @@ namespace CadExSearch.Commons
 
         public ValueTask DisposeAsync()
         {
-            return new(Task.Run(() => { Unlock(); }));
+            return new(Task.Run(Unlock).ContinueWith(_ => GC.SuppressFinalize(this)));
         }
 
         public void Dispose()
         {
             Unlock();
+            GC.SuppressFinalize(this);
         }
 
         public static async Task<GlobalLock> LockAsync()
@@ -51,7 +52,7 @@ namespace CadExSearch.Commons
                 if (IsStateLocked)
                     return;
                 IsLocked = true;
-                Stream stream = null;
+                Stream stream;
                 while (true)
                     try
                     {
@@ -60,10 +61,12 @@ namespace CadExSearch.Commons
                     }
                     catch
                     {
+                        Thread.Sleep(10);
+                        // ignored
                     }
 
                 IsStateLocked = true;
-                while (IsStateLocked) Thread.Sleep(1);
+                while (IsStateLocked) Thread.Sleep(100);
                 stream.Dispose();
             });
             thread.Start();
