@@ -1,14 +1,16 @@
-﻿using AngleSharp.Html.Dom;
+﻿using AngleSharp.Dom;
+using AngleSharp.Html.Dom;
 using AngleSharp.Html.Parser;
 using CadExSearch.Commons;
-using DynamicData;
 using DynamicData.Binding;
+using Medallion.Threading.FileSystem;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using RestSharp;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -17,12 +19,14 @@ using System.Net;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Data;
 
 #pragma warning disable IDE0011
 #pragma warning disable IDE0055
+#pragma warning disable CA1707
 #pragma warning disable CA1805
 #pragma warning disable CA2201
 
@@ -30,19 +34,21 @@ using System.Windows.Data;
 
 namespace CadExSearch
 {
+    // ReSharper disable once InconsistentNaming
     public delegate CadExResult OnSingleResult(CadExResult cadn_desc_addr);
 
     public record CadExResult
     {
         public string CadNumber { get; set; }
         public string Address { get; set; }
-
+        [JsonIgnore]
         public string PortalAddress { get; set; }
 
         public Dictionary<string, string> Extended { get; set; } = default;
+        // ReSharper disable once InconsistentNaming
         public string PKK5Address { get; set; } = default;
         public string Status { get; set; } = default;
-
+        [JsonIgnore]
         public string DefaultView => $"{CadNumber}\t# {Status ?? "Неизвестный"}\t# {Address}";
     }
 
@@ -54,7 +60,7 @@ namespace CadExSearch
         static CadEx()
         {
             using var context = new CacheContext();
-            using (GlobalLock.LockSync())
+            using (GlobalLock.Acquire())
             {
                 if (!context.Database.EnsureCreated() || context.Records.Any()) return;
                 context.Records.Add(new Record { Id = "subject", BaseId = "subject", Content = "root_record" });
@@ -63,7 +69,7 @@ namespace CadExSearch
         }
 
         private object itemsLock;
-        private bool isFullyInitialized = false;
+        private bool isFullyInitialized;
         public CadEx()
         {
             Client = new RestClient("https://rosreestr.gov.ru/wps/")
@@ -78,7 +84,8 @@ namespace CadExSearch
                 {"Accept-Language", "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3"},
                 {"Connection", "keep-alive"}
             });
-            
+            EachResultModifier = (r) => DefaultResultModifier(r, UseResultModifyerIfExists);
+
             this.WhenAnyValue(_ => _.Message)
                 .Where(_ => _ != "")
                 .Delay(TimeSpan.FromSeconds(5))
@@ -99,8 +106,6 @@ namespace CadExSearch
 
                     itemsLock = new object();
                     
-                    BindingOperations.EnableCollectionSynchronization(RawFetchedResults, itemsLock);
-
                     BindingOperations.EnableCollectionSynchronization(Subjects, itemsLock);
                     BindingOperations.EnableCollectionSynchronization(Regions, itemsLock);
                     BindingOperations.EnableCollectionSynchronization(Settlement, itemsLock);
@@ -108,20 +113,21 @@ namespace CadExSearch
                     BindingOperations.EnableCollectionSynchronization(StreetTypes, itemsLock);
 
                     FetchedResults = (ListCollectionView)CollectionViewSource.GetDefaultView(RawFetchedResults);
-                    
-
-                    BindingOperations.EnableCollectionSynchronization(FetchedResults, itemsLock);
-
                     FetchedResults.Filter = s =>
                     {
                         var r = s as CadExResult;
                         if (string.IsNullOrWhiteSpace(FilterExpression) || FilterDirection == null) return true;
-                        return FilterDirection.SafeLet(_ => _ == Regex.IsMatch(r.DefaultView, FilterExpression));
+                        try
+                        {
+                            return Regex.IsMatch(r?.DefaultView ?? string.Empty, FilterExpression) == FilterDirection;
+                        }
+                        catch
+                        {
+                            return true;
+                        }
                     };
 
-                    
-
-                    RawFetchedResults.CollectionChanged += (s, e) =>
+                    RawFetchedResults.CollectionChanged += (_, _) =>
                     {
                         TotalFetch = RawFetchedResults.Count;
                         TotalShown = FetchedResults.Count;
@@ -155,9 +161,9 @@ namespace CadExSearch
                     SettlementAvailable = s != default;
                 });
 
-            this.WhenAnyValue(_ => _.SorterExpression, _ => _.SorterExpression)
-                .Throttle(TimeSpan.FromSeconds(3))
-                .Select(x => RefreshSorter(x.Item1))
+            this.WhenAnyValue(_ => _.SorterExpression, _ => _.SortDirection)
+                .Throttle(TimeSpan.FromSeconds(1))
+                .Select(_ => RefreshSorter())
                 .ObserveOnDispatcher()
                 .Subscribe(_ =>
                 {
@@ -166,6 +172,7 @@ namespace CadExSearch
                 });
 
             this.WhenAnyValue(_ => _.FilterExpression, _ => _.FilterDirection)
+                .Throttle(TimeSpan.FromSeconds(1))
                 .ObserveOnDispatcher()
                 .Subscribe(_ => FetchedResults.Refresh());
 
@@ -195,10 +202,10 @@ namespace CadExSearch
         public ListCollectionView FetchedResults { get; private set; }
 
         [Reactive] public string FilterExpression { get; set; }
-        [Reactive] public bool? FilterDirection { get; set; }
+        [Reactive] public bool? FilterDirection { get; set; } = true;
 
         [Reactive] public string SorterExpression { get; set; }
-        [Reactive] public bool? SortDirection { get; set; }
+        [Reactive] public bool? SortDirection { get; set; } = false;
 
         [Reactive] public int TotalFound { get; private set; }
         [Reactive] public int TotalFetch { get; private set; }
@@ -207,7 +214,95 @@ namespace CadExSearch
 
         [Reactive] public bool IsBusy { get; private set; }
         [Reactive] public bool? UseResultModifyerIfExists { get; set; } = true;
-        public OnSingleResult EachResultModifier { get; set; } = default;
+        public OnSingleResult EachResultModifier { get; set; }
+
+        public static CadExResult DefaultResultModifier(CadExResult r, bool? usage)
+        {
+            try
+            {
+                if (r.PortalAddress == default || usage == null)
+                    return r with { Status = "Неизвестный" };
+                var mode = usage == true;
+                var subClient =
+                    new RestClient(mode ? "http://rosreestr.gov.ru/api/online/" : "https://rosreestr.gov.ru/wps/")
+                    {
+                        Timeout = -1,
+                        CookieContainer = mode ? Cookie : CadEx.Cookie,
+                        UserAgent = CadEx.UserAgent
+                    };
+
+
+                //Remove leading zero's from CN.
+                var cn = r.CadNumber;
+                cn = Regex.Replace(cn, @":0+", ":");
+                cn = Regex.Replace(cn, @"^0+", "");
+                cn = Regex.Replace(cn, @"::", ":0:");
+                cn = Regex.Replace(cn, @":$", ":0");
+                cn = Regex.Replace(cn, @"^:", "0:");
+
+                IRestResponse res = default;
+                for (var i = 0; i < 5; i++)
+                {
+                    res = subClient.Execute(new RestRequest(mode ? $"/fir_object/{cn}" : r.PortalAddress));
+                    if (res is { StatusCode: HttpStatusCode.OK } or { StatusCode: HttpStatusCode.NoContent })
+                        break;
+                }
+
+                if (res is not { StatusCode: HttpStatusCode.OK }) return r with { Status = "Неизвестный" };
+                if (!mode)
+                {
+                    var extended = new Dictionary<string, string>(
+                        from m in Regex.Matches(res.Content,
+                            @"<tr>\s*<td[^>]+>\s*(<(\w+)>)?(?<key>[^<]+)(</\2>)?\s*</td>\s*<td[^>]+>\s*<b>(?<val>[^<]+)")
+                        let key = m.Groups["key"].Value.Trim().Replace("&nbsp;", " ")
+                        let val = m.Groups["val"].Value.Trim().Replace("&nbsp;", " ")
+                        select new KeyValuePair<string, string>(key, val));
+                    var status =
+                        (from kvp in extended where Regex.IsMatch(kvp.Key, "[Сс]татус") select kvp.Value)
+                        .FirstOrDefault() ?? "Неизвестный";
+                    var pkk5 = Regex.Match(res.Content, @"href=""(?<pkk5>.+pkk5[^""]+).+Най")?.Groups["pkk5"]?.Value;
+                    try
+                    {
+                        var right = Regex.Replace(
+                            Regex.Match(res.Content, @"<td.+width=""35%"">(?<right>[^<]+)").Groups["right"].Value,
+                            @"(\n)|(\s{2,})|(&nbsp;)", " ");
+                        if (!string.IsNullOrWhiteSpace(right))
+                            extended.Add("Право:", right);
+                    }
+                    catch
+                    {
+                        // ignored
+                    }
+
+                    try
+                    {
+                        var locks = Regex.Replace(
+                            Regex.Match(res.Content, @"<td.+width=""65%"">(?<right>[^<]+)").Groups["right"].Value,
+                            @"(\n)|(\s{2,})|(&nbsp;)", " ");
+                        if (!string.IsNullOrWhiteSpace(locks))
+                            extended.Add("Ограничение:", locks);
+                    }
+                    catch
+                    {
+                        // ignored
+                    }
+
+                    return r with { Status = status, Extended = extended, PKK5Address = pkk5 };
+                }
+
+                var st = Regex.Match(res.Content, @"tusStr"":""(?<state>[^""]+)")?.Groups["state"]?.Value; // Status
+                var ad = Regex.Match(res.Content, @"fir\w+"":""(?<state>[^""]+)")?.Groups["state"]?.Value; // FirActualDate
+                return r with
+                {
+                    Status = string.IsNullOrWhiteSpace(st) ? "Неизвестен" : st,
+                    Extended = new Dictionary<string, string> { { "Актуально (ФИР):", ad } }
+                };
+            }
+            catch
+            {
+                return r with { Status = "Неизвестный" };
+            }
+        }
 
         private async void InitialConnect()
         {
@@ -403,7 +498,7 @@ namespace CadExSearch
             IsBusy = true;
             if (SelectedRegion == default || type == default) goto lbl;
 
-            var (id, desc) = type;
+            var (id, _) = type;
             var set = CacheGetValues($"REG:{SelectedRegion}:S:{id}");
             if (set == null || !set.Any())
             {
@@ -435,7 +530,7 @@ namespace CadExSearch
             IsBusy = false;
         }
 
-        private IComparer RefreshSorter(string sorter)
+        private IComparer RefreshSorter()
         {
             return SimpleComparer<CadExResult>.Of((r_s1, r_s2) =>
             {
@@ -447,17 +542,18 @@ namespace CadExSearch
                 if (!SorterExpression.TryToRegex(out var reg)) return 0;
                 var sorts = from m in Regex.Matches(SorterExpression, @"\(\?\<(?<sort>s\d+)\>")
                     let ret = m.Groups["sort"].Value
-                    let wgt = int.Parse(Regex.Match(ret, @"(?<num>\d+)").Groups["num"].Value)
+                    let wgt = int.Parse(Regex.Match(ret, @"(?<num>\d+)").Groups["num"].Value, CultureInfo.InvariantCulture.NumberFormat)
                     orderby wgt
                     select (ret, wgt);
-                var im1 = s1.SafeLet(reg.IsMatch);
-                var im2 = s2.SafeLet(reg.IsMatch);
+                bool im1; try { im1 = reg.IsMatch(s1); } catch { im1 = false; }
+                bool im2; try { im2 = reg.IsMatch(s2); } catch { im2 = false; }
 
                 if (!im1 || !im2)
                     return (im1, im2) switch {(true, false) => 1, (false, true) => -1, _ => 0};
 
                 var cmp = StringComparer.FromComparison(StringComparison.OrdinalIgnoreCase);
                 var ms = 0;
+#pragma warning disable IDE0072
                 foreach (var (ret, wgt) in sorts)
                     ms += (reg.Match(s1).Groups[ret].Value, reg.Match(s2).Groups[ret].Value) switch
                     {
@@ -468,14 +564,16 @@ namespace CadExSearch
                         var (m1, m2) =>
                             cmp.Compare(m1, m2) * wgt
                     };
+#pragma warning restore IDE0072
                 return ms switch {< 0 => -1, > 0 => 1, _ => 0};
             }, SortDirection);
         }
 
-        private async Task<(bool, IHtmlDocument)> PrepareByPage(string content)
+        private async Task<(bool, IHtmlDocument)> PrepareByPage(string content, int preMax = -1)
         {
             #region Preparing For Parsing. Getting Messages & Errors
 
+            TotalFound = RawFetchedResults.Count;
             var page = await Parser.ParseDocumentAsync(content);
             //Find information and error messages on the first results page (or main page, if failed).
             var messages = page.QuerySelectorAll("td.infomsg1 span.t12");
@@ -483,7 +581,7 @@ namespace CadExSearch
             {
                 var msg = Regex.Replace(messages.First().InnerHtml,
                     @"(^\s*)|(\s*$)|(&nbsp;)|(\n)|(\t)|(<[^>]+>)", "");
-                var failed = !msg.StartsWith("Найдено");
+                var failed = !msg.StartsWith("Найдено", StringComparison.InvariantCulture);
                 Message = msg;
                 if (failed) return (false, default);
             }
@@ -496,16 +594,16 @@ namespace CadExSearch
                 return (false, default);
             }
 
-            TotalFound = page_stats.First().InnerHtml.TryMatch(@"\D*(?<all>\d+)", out var m)
-                ? m.Select("all", int.Parse)
-                : 0;
+            TotalFound += preMax != -1 ? preMax :
+                page_stats.First().InnerHtml.TryMatch(@"\D*(?<all>\d+)", out var m) ? 
+                    m.Select("all", int.Parse) : 0;
 
             return (true, page);
 
             #endregion
         }
 
-        private IEnumerable<CadExResult> ParsePage(IHtmlDocument page)
+        private IEnumerable<CadExResult> ParsePage(IParentNode page)
         {
             var erm = UseResultModifyerIfExists != null ? EachResultModifier ?? (s => s) : s => s;
 
@@ -528,6 +626,7 @@ namespace CadExSearch
                     });
         }
 
+        // ReSharper disable once MethodOverloadWithOptionalParameter
         private IRestRequest AddHeaders(IRestRequest request, string street, string house = "", string building = "",
             string structure = "", string apartment = "")
         {
@@ -600,7 +699,7 @@ namespace CadExSearch
             //.AddParameter("captchaText", EnteredCaptcha);
         }
 
-        private async Task<bool> StartFetching(IRestRequest initialRequest)
+        private async Task<bool> StartFetching(IRestRequest initialRequest, int preMax = -1)
         {
             #region Stage1 : Prepare
 
@@ -610,13 +709,13 @@ namespace CadExSearch
             int GetCurTime() => (int)sw.Elapsed.TotalSeconds;
 
             var response = await Client.ExecuteAsync(initialRequest);
-            if (response.StatusCode != HttpStatusCode.OK)
+            if (response is not {StatusCode: HttpStatusCode.OK})
             {
                 Message = "Не удалось получить данные по вашему запросу!";
                 return false;
             }
 
-            var (success, page) = await PrepareByPage(response.Content);
+            var (success, page) = await PrepareByPage(response.Content, preMax);
             if (!success) return false;
 
             var erm = UseResultModifyerIfExists != null ? EachResultModifier ?? (s => s) : s => s;
@@ -625,17 +724,18 @@ namespace CadExSearch
 
             #region Current Page Parsing - LINQ Mode
 
-            ParsePage(page)
-                .Select(r => erm(r))
-                .ToObservable()
-                .Subscribe(r =>
-                {
-                    lock (itemsLock)
-                    {
-                        RawFetchedResults.Add(r);
-                        TotalTime = GetCurTime();
-                    }
-                });
+            using (var worker = new BackgroundWorker())
+            {
+                worker.Connect(new CadExResult[] {default}, r =>
+                        ParsePage(page).Select(_ =>
+                        {
+                            TotalTime = GetCurTime();
+                            return erm(_);
+                        }).ToArray(), 
+                    RawFetchedResults);
+                worker.RunWorkerAsync();
+                await worker.WaitForComplete();
+            }
 
             #endregion
 
@@ -643,44 +743,41 @@ namespace CadExSearch
 
             var portlet_id = page.QuerySelector(".asa\\.portlet\\.id").InnerHtml;
 
-            await Parallel.ForEachAsync(Enumerable
-                .Range(0, TotalFound / 20 + (TotalFound % 20 > 0 ? 1 : 0) - 1), async (i, _) =>
+            using (var worker = new BackgroundWorker())
             {
-                IRestResponse r1 = null;
+                worker.Connect(
+                    Enumerable.Range(0, TotalFound / 20 + (TotalFound % 20 > 0 ? 1 : 0) - 1),
+                    i =>
+                    {
+                        IRestResponse r1 = null;
 
-                for (var j = 0; j < 5 && r1 is not {StatusCode: HttpStatusCode.OK}; j++)
-                    r1 = await new RestClient("https://rosreestr.gov.ru/wps") {CookieContainer = Cookie}
-                        .ExecuteAsync(new RestRequest(
-                                $"{URIs["form-addr"]}?online_request_search_page={i + 2}#{portlet_id}")
-                            .AddHeader("Referer", Referer).AddHeader("Upgrade-Insecure-Requests", "1"), _);
+                        for (var j = 0; j < 5 && r1 is not {StatusCode: HttpStatusCode.OK}; j++)
+                            r1 = new RestClient("https://rosreestr.gov.ru/wps") {CookieContainer = Cookie}
+                                .Execute(new RestRequest(
+                                        $"{URIs["form-addr"]}?online_request_search_page={i + 2}#{portlet_id}")
+                                    .AddHeader("Referer", Referer).AddHeader("Upgrade-Insecure-Requests", "1"));
 
-                TotalTime = GetCurTime();
+                        TotalTime = GetCurTime();
 
-                var r2 = r1 is {StatusCode: HttpStatusCode.OK} ? await Parser.ParseDocumentAsync(r1.Content, _) : null;
-                if (r2 is null) Message = $"Не удалось получить страницу {i}";
+                        var r2 = r1 is {StatusCode: HttpStatusCode.OK} ? Parser.ParseDocument(r1.Content) : null;
+                        if (r2 is null) Message = $"Не удалось получить страницу {i}";
 
-                TotalTime = GetCurTime();
+                        TotalTime = GetCurTime();
 
-                var r3 = r2 is null ? Array.Empty<CadExResult>() : ParsePage(r2).Select(r => erm(r)).ToArray();
+                        var r3 = r2 is null ? Array.Empty<CadExResult>() : ParsePage(r2).Select(r => erm(r)).ToArray();
 
-                r3.AsParallel().ForAll(r =>
-                {
-                    lock (itemsLock)
-                        RawFetchedResults.Add(new[] {r});
-                });
-                
-                //lock (itemsLock)
-                //    r3.ToObservable().ObserveOn(RxApp.TaskpoolScheduler)
-                //        .Subscribe(RawFetchedResults.Add);
+                        return r3;
+                    }, RawFetchedResults);
+                worker.RunWorkerAsync();
+                await worker.WaitForComplete();
+            }
 
-                TotalTime = GetCurTime();
-            });
-    
+            TotalTime = GetCurTime();
             sw.Stop();
             return true;
         }
 
-        public async Task<bool> DownloadResults(string street, string house = "", string building = "",
+        public async Task<bool> DownloadResults(string street, string house, string building = "",
             string structure = "",
             string apartment = "")
         {
@@ -689,15 +786,20 @@ namespace CadExSearch
             var initialRequest = AddHeaders(new RestRequest(URIs["form-addr"], Method.POST), street, house,
                 building,
                 structure, apartment);
-            return await StartFetching(initialRequest).ContinueWith(t => IsBusy = false);
+            return await StartFetching(initialRequest).ContinueWith(_ => IsBusy = false);
         }
 
         public async Task<bool> DownloadResults(string cad_number)
         {
             if (IsBusy) return false;
             IsBusy = true;
-            var initialRequest = AddHeaders(new RestRequest(URIs["form-addr"], Method.POST), cad_number);
-            return await StartFetching(initialRequest).ContinueWith(t => IsBusy = false);
+            var prep = ParseCadasters(cad_number, out var count).ToList();
+            if (prep.Any() && count > 0)
+                return await Task.WhenAll(prep
+                        .Select(async (c) =>
+                            await StartFetching(AddHeaders(new RestRequest(URIs["form-addr"], Method.POST), c), count)))
+                    .ContinueWith(_ => IsBusy = false);
+            return false;
         }
 
         public void NewSession(bool clear)
@@ -709,12 +811,58 @@ namespace CadExSearch
             }
 
             SelectedSubject = default;
+            TotalTime = 0;
+        }
+
+        private static IEnumerable<string> ParseCadasters(string cads, out int count)
+        {
+            count = 0; var cadasters = new List<string>();
+
+            var cad = cads.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => Regex.Replace(s.Trim(), @"\s+", ""));
+            var ret = new List<string>(20);
+            
+            foreach (var c in cad)
+                if (c.Contains('-'))
+                {
+                    var parts = c.Split(':');
+                    if (!parts[3].Contains('-')) continue;
+                    var pp = parts[3].Split('-');
+
+                    if (!int.TryParse(pp[0], out var s) || !int.TryParse(pp[1], out var e) || s >= e) return cadasters;
+
+                    for (var j = s; j < e; j++)
+                    {
+                        var _r = string.Join(':', parts[0], parts[1], parts[2], j.ToString(CultureInfo.InvariantCulture.NumberFormat));
+                        ret.Add(_r);
+                        if (ret.Count != 20) continue;
+                        cadasters.Add(string.Join(';', ret));
+                        count += ret.Count;
+                        ret.Clear();
+                    }
+                }
+                else
+                {
+                    ret.Add(c);
+                    if (ret.Count != 20) continue;
+                    cadasters.Add(string.Join(';', ret));
+                    count += ret.Count;
+                    ret.Clear();
+                }
+
+            if (!ret.Any()) return cadasters;
+
+            cadasters.Add(string.Join(';', ret));
+            count += ret.Count;
+
+            return cadasters;
         }
 
         #region Cache
 
-        private record CacheRecord(string Id, (string, string) Value, string Type, string BaseId);
+        //private record CacheRecord(string Id, (string, string) Value, string Type, string BaseId);
 
+        private static FileDistributedLock GlobalLock { get; } = new (new FileInfo("CadEx.Cache.lock"));
         public static SHA512 SHA { get; } = SHA512.Create();
 
         public static string GetId((string,string) record)
@@ -726,8 +874,8 @@ namespace CadExSearch
 
         private static (string, string)[] CacheGetValues(string root)
         {
-            using (var cache = new CacheContext())
-            using (GlobalLock.LockSync())
+            using var cache = new CacheContext();
+            using (GlobalLock.Acquire())
             {
                 var ret = new List<(string, string)>();
                 foreach (var rr in from r in cache.Records
@@ -736,24 +884,13 @@ namespace CadExSearch
                     ret.Add((rr[0], rr[1]));
                 return ret.OrderBy(v => v.Item2).ToArray();
             }
-            // Akavache variance:
-            //using (GlobalLock.LockSync())
-            //{
-            //    using var cache = new SqlRawPersistentBlobCache(".\\CadEx.Cache.db3", RxApp.TaskpoolScheduler);
-            //    var recs = cache.GetAllObjects<CacheRecord>().Wait();
-            //    return
-            //        (from r in recs
-            //        where r.BaseId == root && r.Type == "value"
-            //        orderby r.Value.Item2
-            //        select r.Value).ToArray();
-            //}
         }
 
         private static async void CacheSetValues(string root, IEnumerable<(string, string)> values)
         {
             var vals = values as (string, string)[] ?? values.ToArray();
             if (!vals.Any()) return;
-            await using (await GlobalLock.LockAsync())
+            await using (await GlobalLock.AcquireAsync())
             await using (var cache = new CacheContext())
             {
                 foreach (var p in vals)
@@ -764,25 +901,13 @@ namespace CadExSearch
                 }
                 await cache.SaveChangesAsync();
             }
-
-            // Akavache variance
-            //var val = values as (string, string)[] ?? values.ToArray();
-            //if (!val.Any()) return;
-            //var recs = val.ToDictionary(s => GetId($"{s.Item1}:{s.Item2}"),
-            //    s => new CacheRecord(GetId($"{s.Item1}:{s.Item2}"), s, "value", root));
-            //using (GlobalLock.LockSync())
-            //{
-            //    using var cache = new SqlRawPersistentBlobCache(".\\CadEx.Cache.db3", RxApp.TaskpoolScheduler);
-            //    using (cache.InsertAllObjects(recs).Subscribe()) { }
-            //    using (cache.Flush().Subscribe()) { }
-            //}
         }
 
-        private static async Task<bool> AddFork(string root, string fork)
+        private static async Task AddFork(string root, string fork)
         {
             try
             {
-                await using (await GlobalLock.LockAsync())
+                await using (await GlobalLock.AcquireAsync())
                 await using (var cache = new CacheContext())
                 {
                     await cache.AddAsync(new Record { BaseId = root, Id = fork, Content = "fork_record" });
@@ -791,9 +916,8 @@ namespace CadExSearch
             }
             catch
             {
-                return false;
+                // Ignored
             }
-            return true;
         }
 
         #endregion

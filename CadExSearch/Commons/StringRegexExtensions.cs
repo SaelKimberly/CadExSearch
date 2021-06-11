@@ -56,11 +56,17 @@ namespace CadExSearch.Commons
         /// <returns></returns>
         public static bool TryMatch(this string input, string pattern, [MaybeNullWhen(false)] out Match match)
         {
-            return input.SafeLet(i => (i, p: pattern) switch
+            match = default;
+            try
             {
-                var (v, p) when !Regex.IsMatch(v, p) => throw new ArgumentException(""),
-                var (v, p) => Regex.Match(v, p)
-            }, out match);
+                match = (input, p: pattern) switch
+                {
+                    var (v, p) when !Regex.IsMatch(v, p) => throw new ArgumentException(""),
+                    _ => Regex.Match(input, pattern)
+                };
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>
@@ -74,11 +80,17 @@ namespace CadExSearch.Commons
         /// <returns></returns>
         public static bool TryMatches(this string input, string pattern, [MaybeNullWhen(false)] out MatchCollection mc)
         {
-            return input.SafeLet(i => (i, p: pattern) switch
+            mc = default;
+            try
             {
-                var (v, p) when !Regex.IsMatch(v, p) => throw new ArgumentException(""),
-                var (v, p) => Regex.Matches(v, p)
-            }, out mc);
+                mc = (i: input, p: pattern) switch
+                {
+                    var (v, p) when !Regex.IsMatch(v, p) => throw new ArgumentException(""),
+                    _ => Regex.Matches(input, pattern)
+                };
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>
@@ -94,11 +106,17 @@ namespace CadExSearch.Commons
         public static bool TryMatch(this string input, string pattern, RegexOptions options,
             [MaybeNullWhen(false)] out Match match)
         {
-            return input.SafeLet(i => (i, p: pattern) switch
+            match = default;
+            try
             {
-                var (v, p) when !Regex.IsMatch(v, p, options) => throw new ArgumentException(""),
-                var (v, p) => Regex.Match(v, p, options)
-            }, out match);
+                match = (input, p: pattern) switch
+                {
+                    var (v, p) when !Regex.IsMatch(v, p, options) => throw new ArgumentException(""),
+                    _ => Regex.Match(input, pattern, options)
+                };
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>
@@ -114,11 +132,17 @@ namespace CadExSearch.Commons
         public static bool TryMatches(this string input, string pattern, RegexOptions options,
             [MaybeNullWhen(false)] out MatchCollection mc)
         {
-            return input.SafeLet(i => (i, p: pattern) switch
+            mc = default;
+            try
             {
-                var (v, p) when !Regex.IsMatch(v, p, options) => throw new ArgumentException(""),
-                var (v, p) => Regex.Matches(v, p, options)
-            }, out mc);
+                mc = (i: input, p: pattern) switch
+                {
+                    var (v, p) when !Regex.IsMatch(v, p, options) => throw new ArgumentException(""),
+                    _ => Regex.Matches(input, pattern, options)
+                };
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>
@@ -245,7 +269,11 @@ namespace CadExSearch.Commons
         /// <returns></returns>
         public static IEnumerable<T> TrySelect<T>(this IEnumerable<Match> mc, string group, Func<string, T> selector)
         {
-            return mc.SafeLet(_ => _.Select(group, selector), ArraySegment<T>.Empty);
+            try
+            {
+                return mc.Select(group, selector);
+            }
+            catch { return ArraySegment<T>.Empty; }
         }
 
         /// <summary>
@@ -260,7 +288,11 @@ namespace CadExSearch.Commons
         /// <returns></returns>
         public static IEnumerable<T> TrySelect<T>(this MatchCollection mc, string group, Func<string, T> selector)
         {
-            return mc.SafeLet(_ => _.Select(group, selector), ArraySegment<T>.Empty);
+            try
+            {
+                return mc.Select(group, selector);
+            }
+            catch { return ArraySegment<T>.Empty; }
         }
 
         /// <summary>
@@ -319,7 +351,11 @@ namespace CadExSearch.Commons
         /// <returns></returns>
         public static IEnumerable<T> TrySelect<T>(this IEnumerable<Match> mc, int group, Func<string, T> selector)
         {
-            return mc.SafeLet(_ => _.Select(group, selector), ArraySegment<T>.Empty);
+            try
+            {
+                return mc.Select(group, selector);
+            }
+            catch { return ArraySegment<T>.Empty; }
         }
 
         /// <summary>
@@ -334,7 +370,11 @@ namespace CadExSearch.Commons
         /// <returns></returns>
         public static IEnumerable<T> TrySelect<T>(this MatchCollection mc, int group, Func<string, T> selector)
         {
-            return mc.SafeLet(_ => _.Select(group, selector), ArraySegment<T>.Empty);
+            try
+            {
+                return mc.Select(group, selector);
+            }
+            catch { return ArraySegment<T>.Empty; }
         }
 
         /// <summary>
@@ -477,7 +517,13 @@ namespace CadExSearch.Commons
         public static bool TrySelect<T>(this Match m, string group, Func<string, T> selector,
             [MaybeNullWhen(false)] out T value)
         {
-            return m.SafeLet(_ => _.Select(group, selector), out value);
+            value = default;
+            try
+            {
+                value = m.Select(group, selector);
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>
@@ -519,7 +565,13 @@ namespace CadExSearch.Commons
         public static bool TrySelect<T>(this Match m, int group, Func<string, T> selector,
             [MaybeNullWhen(false)] out T value)
         {
-            return m.SafeLet(_ => _.Select(group, selector), out value);
+            value = default;
+            try
+            {
+                value = m.Select(group, selector);
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>

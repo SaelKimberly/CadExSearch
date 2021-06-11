@@ -55,30 +55,51 @@ namespace CadExSearch.Commons
 
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
-            return value
-                .SafeLet(v => UpCast(v, parameter))
-                .SafeLet(v => NextCast.UpCast(v), _ => NextCast is null);
+            return UpCast(value, parameter, null, out var ret)
+                ? NextCast is null ? ret :
+                NextCast.UpCast(ret, null, null, out ret) ? ret : value
+                : value;
         }
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
         {
-            return DnCast(value, parameter);
+            return DnCast(value, parameter, null, out var ret) ? ret : value;
         }
 
-        internal object UpCast(object value, object p1 = null, object p2 = null)
+        internal bool UpCast(object value, object p1, object p2, out object result)
         {
-            return value.SafeLet(_ => ConvertHandler?.Invoke(_, _.GetType(),
-                Parameter1 ?? p1,
-                default,
-                Parameter2 ?? p2), v => v == default);
+            result = value;
+            if (value is null) return false;
+            try
+            {
+                result = ConvertHandler?.Invoke(value, value.GetType(),
+                    Parameter1 ?? p1,
+                    default,
+                    Parameter2 ?? p2);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
-        internal object DnCast(object value, object p1 = null, object p2 = null)
+        internal bool DnCast(object value, object p1, object p2, out object result)
         {
-            return value.SafeLet(_ => ((ConvertHandler) ConvertBackHandler)?.Invoke(_, _.GetType(),
-                Parameter1 ?? p1,
-                default,
-                Parameter2 ?? p2));
+            result = value;
+            if (value is null) return false;
+            try
+            {
+                result = ((ConvertHandler) ConvertBackHandler)?.Invoke(value, value.GetType(),
+                    Parameter1 ?? p1,
+                    default,
+                    Parameter2 ?? p2);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public override object ProvideValue(IServiceProvider serviceProvider)
@@ -88,36 +109,36 @@ namespace CadExSearch.Commons
 
         public static Recast Of(Func<object, object> f)
         {
-            return new() {ConvertHandler = (v, t, p, c, e) => f(v)};
+            return new() {ConvertHandler = (v, _, _, _, _) => f(v)};
         }
 
         public static Recast Of(Func<object, object, object> f)
         {
-            return new() {ConvertHandler = (v, t, p, c, e) => f(v, p)};
+            return new() {ConvertHandler = (v, _, p, _, _) => f(v, p)};
         }
 
         public static Recast Of(Func<object, object, object, object> f)
         {
-            return new() {ConvertHandler = (v, t, p, c, e) => f(v, p, e)};
+            return new() {ConvertHandler = (v, _, p, _, e) => f(v, p, e)};
         }
 
         public static Recast Of<T>(Func<T, object> f)
         {
-            return new() {ConvertHandler = (v, t, p, c, e) => f((T) v)};
+            return new() {ConvertHandler = (v, _, _, _, _) => f((T) v)};
         } // ReSharper disable InconsistentNaming
         public static Recast Of<T, R>(Func<T, R> f)
         {
-            return new() {ConvertHandler = (v, t, p, c, e) => f((T) v)};
+            return new() {ConvertHandler = (v, _, _, _, _) => f((T) v)};
         }
 
         public static Recast Of<T, P1, R>(Func<T, P1, R> f)
         {
-            return new() {ConvertHandler = (v, t, p, c, e) => f((T) v, (P1) p)};
+            return new() {ConvertHandler = (v, _, p, _, _) => f((T) v, (P1) p)};
         }
 
         public static Recast Of<T, P1, P2, R>(Func<T, P1, P2, R> f)
         {
-            return new() {ConvertHandler = (v, t, p, c, e) => f((T) v, (P1) p, (P2) e)};
+            return new() {ConvertHandler = (v, _, p, _, e) => f((T) v, (P1) p, (P2) e)};
         }
 
         public static implicit operator Recast(ConvertHandler ch)
